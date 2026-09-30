@@ -40,6 +40,9 @@ export const MAX_ERROR_CHARS = 300;
 /** Longest cursor string kept. Real cursors are `<TOID>-<index>`, far shorter. */
 export const MAX_CURSOR_CHARS = 128;
 
+/** Longest send-duration string kept. Real values are short, e.g. `1234ms`. */
+export const MAX_SEND_DURATION_CHARS = 32;
+
 /**
  * Collapse whitespace and truncate. Applied to every string that originates
  * outside this process (RPC errors, Telegram errors, cursors), so the snapshot
@@ -71,7 +74,19 @@ export interface StatusTargetSnapshot {
   contractId: string;
   cursor: string | null;
   lastEventLedger: number | null;
+  /**
+   * Ledger a target is resuming from after an automatic floor rewind, or null.
+   * A bounded ledger number, never a cursor, token, or remote payload.
+   */
+  rewindFromLedger: number | null;
+  /** RPC rejected this target's cursor as stale; true until a scan succeeds. */
+  cursorStale: boolean;
   lastError: string | null;
+  /**
+   * Bounded description of the most recent per-send timeout, or null. Never a
+   * token, chat id, or remote payload — only a coarse reason and duration.
+   */
+  lastSendTimeout: string | null;
 }
 
 export interface StatusSnapshot {
@@ -94,7 +109,18 @@ export interface StatusSnapshot {
   notificationsSent: number;
   notificationsFailed: number;
   eventsSkipped: number;
+  /** Suppressed by the bounded dedup window as already-processed. */
+  eventsDeduplicated: number;
+  /** Cursors automatically rewound to the RPC's retained floor this run. */
+  cursorRewinds: number;
   consecutiveFailures: number;
+  /**
+   * Count of individual Telegram sends aborted by the per-send timeout this
+   * run. Bounded integer; never includes tokens or message bodies.
+   */
+  sendTimeouts: number;
+  /** Bounded description of the most recent per-send timeout, or null. */
+  lastSendTimeout: string | null;
   lastError: { at: number; message: string } | null;
   targets: StatusTargetSnapshot[];
 }
@@ -126,7 +152,13 @@ export function buildStatusSnapshot(
     notificationsSent: status.notificationsSent,
     notificationsFailed: status.notificationsFailed,
     eventsSkipped: status.eventsSkipped,
+    eventsDeduplicated: status.eventsDeduplicated ?? 0,
+    cursorRewinds: status.cursorRewinds ?? 0,
     consecutiveFailures: status.consecutiveFailures,
+    sendTimeouts: status.sendTimeouts ?? 0,
+    lastSendTimeout: status.lastSendTimeout
+      ? boundText(status.lastSendTimeout, MAX_SEND_DURATION_CHARS)
+      : null,
     lastError: status.lastError
       ? { at: status.lastError.at, message: boundText(status.lastError.message) }
       : null,
@@ -135,7 +167,14 @@ export function buildStatusSnapshot(
       contractId: target.contractId,
       cursor: target.cursor === null ? null : boundText(target.cursor, MAX_CURSOR_CHARS),
       lastEventLedger: target.lastEventLedger,
+      rewindFromLedger:
+        typeof target.rewindFromLedger === "number" ? target.rewindFromLedger : null,
+      cursorStale: target.cursorStale === true,
       lastError: target.lastError === null ? null : boundText(target.lastError),
+      lastSendTimeout:
+        target.lastSendTimeout === null || target.lastSendTimeout === undefined
+          ? null
+          : boundText(target.lastSendTimeout, MAX_SEND_DURATION_CHARS),
     })),
   };
 }
